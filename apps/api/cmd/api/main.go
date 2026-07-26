@@ -16,12 +16,12 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/suncrestlabs/nester/apps/api/internal/auth"
-	"github.com/suncrestlabs/nester/apps/api/internal/config"
-	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/golang-migrate/migrate/v4"
 	migratedb "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/suncrestlabs/nester/apps/api/internal/auth"
+	"github.com/suncrestlabs/nester/apps/api/internal/config"
+	"github.com/suncrestlabs/nester/apps/api/internal/domain/transaction"
 	"github.com/suncrestlabs/nester/apps/api/internal/handler"
 	"github.com/suncrestlabs/nester/apps/api/internal/middleware"
 	"github.com/suncrestlabs/nester/apps/api/internal/oracle"
@@ -68,19 +68,19 @@ func run() error {
 
 	if cfg.Startup().EnableAutoMigrate() {
 		baseLogger.Info("running database migrations", "dir", cfg.Startup().MigrationsDir())
-		
+
 		driver, err := migratedb.WithInstance(db, &migratedb.Config{})
 		if err != nil {
 			return fmt.Errorf("auto-migrate: init driver: %w", err)
 		}
-		
+
 		m, err := migrate.NewWithDatabaseInstance(
 			"file://"+cfg.Startup().MigrationsDir(),
 			"postgres", driver)
 		if err != nil {
 			return fmt.Errorf("auto-migrate: new migrate instance: %w", err)
 		}
-		
+
 		if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 			return fmt.Errorf("auto-migrate: up: %w", err)
 		}
@@ -188,6 +188,12 @@ func run() error {
 	performanceService := performancesvc.NewService(performanceRepository, vaultRepository)
 	performanceHandler := handler.NewPerformanceHandler(performanceService)
 
+	// Monte Carlo savings projection (#843): grounds yield volatility in the
+	// vault's own realized-APY history and contribution reliability in the
+	// user's own deposit history (see internal/domain/projection/README.md).
+	projectionService := service.NewProjectionService(vaultRepository, performanceRepository)
+	projectionHandler := handler.NewProjectionHandler(projectionService)
+
 	tracker := performancesvc.NewTracker(
 		performanceRepository,
 		vaultRepository,
@@ -256,7 +262,8 @@ func run() error {
 	performanceHandler.Register(mux)
 	analyticsHandler := handler.NewAnalyticsHandler(performanceService)
 	analyticsHandler.Register(mux)
-	
+	projectionHandler.Register(mux)
+
 	// Risk service
 	riskService := services.NewRiskService(vaultRepository)
 	riskHandler := handler.NewRiskHandler(riskService)
@@ -573,4 +580,3 @@ func pingStellarDependencies(logger *slog.Logger, cfg *config.Config) error {
 
 	return nil
 }
-
